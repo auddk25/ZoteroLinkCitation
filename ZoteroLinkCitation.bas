@@ -30,6 +30,8 @@ Public Sub ZoteroLinkCitation()
     Set usedBookmarks = CreateObject("Scripting.Dictionary")
     Dim truncatedCount As Long
     truncatedCount = 0
+    Dim array_RefTitle(200) As String
+    Dim RefNumber(200) As String
 
     ActiveWindow.View.ShowFieldCodes = True
     Selection.Find.ClearFormatting
@@ -122,7 +124,6 @@ Public Sub ZoteroLinkCitation()
                 ' ========== 解析所有 title ==========
                 ' 【审计修复】将转义引号 \" 替换为占位符，防止 JSON 解析被截断
                 fieldCode = Replace(fieldCode, "\""", Chr(1))
-                Dim array_RefTitle(200) As String
                 i = 0
                 Do While InStr(fieldCode, """title"":""") > 0
                     n1 = InStr(fieldCode, """title"":""") + Len("""title"":""")
@@ -144,7 +145,6 @@ Public Sub ZoteroLinkCitation()
                 Titles_in_Cit = i
                 
                 ' ========== 解析所有 RefNumber ==========
-                Dim RefNumber(200) As String
                 i = 0
                 Do While (InStr(plain_Cit, "]") Or InStr(plain_Cit, "[")) > 0
                     n1 = InStr(plain_Cit, "[")
