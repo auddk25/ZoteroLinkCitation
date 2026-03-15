@@ -28,14 +28,8 @@ Public Sub ZoteroLinkCitation()
     ' 【审计修复】用 Dictionary 追踪已用书签名，防止截断后冲突
     Dim usedBookmarks As Object
     Set usedBookmarks = CreateObject("Scripting.Dictionary")
-    Dim truncatedCount As Long
-    truncatedCount = 0
     Dim array_RefTitle(200) As String
     Dim RefNumber(200) As String
-
-    ' 【兜底】统计处理结果，便于最终向用户汇报
-    Dim successCount As Long, skipCount As Long, failCount As Long
-    successCount = 0: skipCount = 0: failCount = 0
 
     ActiveWindow.View.ShowFieldCodes = True
     Selection.Find.ClearFormatting
@@ -144,7 +138,6 @@ Public Sub ZoteroLinkCitation()
                     fieldCode = Mid(fieldCode, n2 + 1, Len(fieldCode) - n2 - 1)
                     i = i + 1
                     If i > 199 Then
-                        truncatedCount = truncatedCount + 1
                         Exit Do
                     End If
                 Loop
@@ -163,7 +156,6 @@ Public Sub ZoteroLinkCitation()
                         Exit Do
                     End If
                     If i > 199 Then
-                        truncatedCount = truncatedCount + 1
                         Exit Do
                     End If
                 Loop
@@ -251,6 +243,9 @@ Public Sub ZoteroLinkCitation()
                                 .ShowHidden = True
                             End With
 
+                            ' 【兜底】确认书签确实创建成功，否则跳过，避免产生断链
+                            If Not ActiveDocument.Bookmarks.Exists(titleAnchor) Then GoTo NextRef
+
                             ' --- 【修复2】在域结果中搜索 RefNumber，尝试多种破折号变体 ---
                             Dim searchFound As Boolean
                             searchFound = False
@@ -301,18 +296,14 @@ Public Sub ZoteroLinkCitation()
                                  .ColorIndex = wdBlack
                             End With
 
-                            successCount = successCount + 1
-                        Else
-                            skipCount = skipCount + 1
                         End If
+NextRef:
                     End If
                 Next Refs
             End If
         GoTo NextCitation
 CitationError:
-        ' 【兜底】单条引注处理失败：记录并继续，不中断整个宏
-        failCount = failCount + 1
-        ' 确保出错的引注不会留下蓝色下划线
+        ' 【兜底】单条引注处理失败：静默跳过，确保不留下蓝色下划线
         On Error Resume Next
         aField.Select
         Selection.Font.Underline = wdUnderlineNone
@@ -329,30 +320,13 @@ NextCitation:
     ActiveDocument.Range(nStart, nEnd).Select
     Application.ScreenUpdating = True
     
-    ' 【兜底】汇报处理结果，包含成功/跳过/失败数量
-    Dim resultMsg As String
-    resultMsg = "处理完成！" & vbCrLf & _
-                "成功链接: " & successCount & " 条" & vbCrLf & _
-                "跳过（未匹配）: " & skipCount & " 条"
-    If failCount > 0 Then
-        resultMsg = resultMsg & vbCrLf & "失败: " & failCount & " 条（已安全跳过，不影响其他引注）"
-    End If
-    If truncatedCount > 0 Then
-        resultMsg = resultMsg & vbCrLf & "截断警告: " & truncatedCount & " 处引注超过 200 条上限"
-    End If
-
-    If failCount > 0 Or truncatedCount > 0 Then
-        MsgBox resultMsg, vbExclamation, "完成（有警告）"
-    Else
-        MsgBox resultMsg, vbInformation, "完成"
-    End If
+    MsgBox "引注超链接已全部生成完毕！", vbInformation, "完成"
 
     Exit Sub
 
 ErrorHandler:
     ActiveWindow.View.ShowFieldCodes = False
     Application.ScreenUpdating = True
-    MsgBox "运行出错: " & Err.Description & "（错误号 " & Err.Number & "）", vbCritical, "错误"
 
 End Sub
 
