@@ -33,6 +33,10 @@ Public Sub ZoteroLinkCitation()
     Dim array_RefTitle(200) As String
     Dim RefNumber(200) As String
 
+    ' 【兜底】统计处理结果，便于最终向用户汇报
+    Dim successCount As Long, skipCount As Long, failCount As Long
+    successCount = 0: skipCount = 0: failCount = 0
+
     ActiveWindow.View.ShowFieldCodes = True
     Selection.Find.ClearFormatting
  
@@ -94,6 +98,8 @@ Public Sub ZoteroLinkCitation()
     ' 倒序遍历：新插入的 Field 索引在后方，不影响前方未处理的元素
     Dim zi As Long
     For zi = zotFieldCount To 1 Step -1
+        ' 【兜底】单条引注出错不中断整个宏，跳过继续处理下一条
+        On Error GoTo CitationError
         Set aField = ActiveDocument.Fields(zotFieldIndices(zi))
         fieldCode = aField.Code
             
@@ -237,27 +243,27 @@ Public Sub ZoteroLinkCitation()
                             Selection.MoveEndUntil (vbCr)
                             lnkcap = Selection.Text
                             lnkcap = Left(lnkcap, 70)
-                            
+
                             Selection.Shrink
                             With ActiveDocument.Bookmarks
                                 .Add Range:=Selection.Range, Name:=titleAnchor
                                 .DefaultSorting = wdSortByName
                                 .ShowHidden = True
                             End With
-                            
+
                             ' --- 【修复2】在域结果中搜索 RefNumber，尝试多种破折号变体 ---
                             Dim searchFound As Boolean
                             searchFound = False
-                            
+
                             Dim dashVariants(2) As String
                             dashVariants(0) = RefNumber(Refs)
                             dashVariants(1) = Replace(Replace(RefNumber(Refs), ChrW(8211), "-"), ChrW(8212), "-")
                             dashVariants(2) = Replace(Replace(RefNumber(Refs), "-", ChrW(8211)), ChrW(8212), ChrW(8211))
-                            
+
                             Dim v As Long
                             For v = 0 To 2
                                 If searchFound Then Exit For
-                                
+
                                 aField.Select
                                 Selection.Find.ClearFormatting
                                 With Selection.Find
@@ -270,7 +276,7 @@ Public Sub ZoteroLinkCitation()
                                     .MatchWholeWord = False
                                 End With
                                 Selection.Find.Execute
-                                
+
                                 If Selection.Find.Found Then
                                     If Selection.Start >= aField.Result.Start And Selection.End <= aField.Result.End Then
                                         numOrYear = Selection.Range.Text & ""
@@ -281,36 +287,64 @@ Public Sub ZoteroLinkCitation()
                                     End If
                                 End If
                             Next v
-                            
+
                             ' 兜底：万一所有变体都找不到，给整个引注块加链接
                             If Not searchFound Then
                                 ActiveDocument.Hyperlinks.Add Anchor:=aField.Result, _
                                     Address:="", SubAddress:=titleAnchor, ScreenTip:=lnkcap
                             End If
-                            
+
                             ' 去除链接自带的蓝色下划线，保持论文黑字原样
                             aField.Select
                             With Selection.Font
                                  .Underline = wdUnderlineNone
                                  .ColorIndex = wdBlack
                             End With
-                            
+
+                            successCount = successCount + 1
+                        Else
+                            skipCount = skipCount + 1
                         End If
                     End If
                 Next Refs
             End If
+        GoTo NextCitation
+CitationError:
+        ' 【兜底】单条引注处理失败：记录并继续，不中断整个宏
+        failCount = failCount + 1
+        ' 确保出错的引注不会留下蓝色下划线
+        On Error Resume Next
+        aField.Select
+        Selection.Font.Underline = wdUnderlineNone
+        Selection.Font.ColorIndex = wdBlack
+        On Error GoTo 0
+        ' 必须用 Resume 退出错误处理模式，否则下一次迭代的 On Error GoTo 不生效
+        Resume NextCitation
+NextCitation:
     Next zi
+    On Error GoTo ErrorHandler
 
     ' 恢复原始选择范围并重新开启屏幕刷新
     ActiveWindow.View.ShowFieldCodes = False
     ActiveDocument.Range(nStart, nEnd).Select
     Application.ScreenUpdating = True
     
-    ' 【审计修复】如有数组截断，提示用户部分引注未处理
+    ' 【兜底】汇报处理结果，包含成功/跳过/失败数量
+    Dim resultMsg As String
+    resultMsg = "处理完成！" & vbCrLf & _
+                "成功链接: " & successCount & " 条" & vbCrLf & _
+                "跳过（未匹配）: " & skipCount & " 条"
+    If failCount > 0 Then
+        resultMsg = resultMsg & vbCrLf & "失败: " & failCount & " 条（已安全跳过，不影响其他引注）"
+    End If
     If truncatedCount > 0 Then
-        MsgBox "处理完成，但有 " & truncatedCount & " 处引注因超过 200 条上限被截断，部分链接可能缺失。", vbExclamation, "完成（有警告）"
+        resultMsg = resultMsg & vbCrLf & "截断警告: " & truncatedCount & " 处引注超过 200 条上限"
+    End If
+
+    If failCount > 0 Or truncatedCount > 0 Then
+        MsgBox resultMsg, vbExclamation, "完成（有警告）"
     Else
-        MsgBox "完美搞定！包含合并格式的引注超链接已全部生成完毕！", vbInformation, "完成"
+        MsgBox resultMsg, vbInformation, "完成"
     End If
 
     Exit Sub
