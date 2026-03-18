@@ -33,7 +33,7 @@ Public Sub ZoteroLinkCitation()
 
     ActiveWindow.View.ShowFieldCodes = True
     Selection.Find.ClearFormatting
- 
+
     ' 寻找文末的 Zotero 参考文献列表
     With Selection.Find
         .Text = "^d ADDIN ZOTERO_BIBL"
@@ -64,7 +64,7 @@ Public Sub ZoteroLinkCitation()
         .DefaultSorting = wdSortByName
         .ShowHidden = True
     End With
-    
+
     ' 【审计修复】先收集所有 Zotero 域的索引，再倒序遍历，
     ' 避免 Hyperlinks.Add 插入新 Field 导致 For Each 迭代器异常
     Dim aField As Field
@@ -89,6 +89,10 @@ Public Sub ZoteroLinkCitation()
         Exit Sub
     End If
 
+    ' 用于调试：记录失败的引文
+    Dim failedCitations As String
+    failedCitations = ""
+
     ' 倒序遍历：新插入的 Field 索引在后方，不影响前方未处理的元素
     Dim zi As Long
     For zi = zotFieldCount To 1 Step -1
@@ -96,13 +100,13 @@ Public Sub ZoteroLinkCitation()
         On Error GoTo CitationError
         Set aField = ActiveDocument.Fields(zotFieldIndices(zi))
         fieldCode = aField.Code
-            
+
             Dim plain_Cit As String
             Dim plCitStrBeg As String, plCitStrEnd As String
             plCitStrBeg = """plainCitation"":""["
             plCitStrEnd = "]"""
             n1 = InStr(fieldCode, plCitStrBeg)
-            
+
             If n1 > 0 Then
                 ' 【审计修复】清除该域结果中已有的超链接，防止重复运行叠加
                 Dim hl As Long
@@ -113,10 +117,10 @@ Public Sub ZoteroLinkCitation()
                 n1 = n1 + Len(plCitStrBeg)
                 n2 = InStr(Mid(fieldCode, n1, Len(fieldCode) - n1), plCitStrEnd) - 1 + n1
                 plain_Cit = Mid$(fieldCode, n1 - 1, n2 - n1 + 2)
-                
+
                 ' 【审计修复】解码所有 \uXXXX Unicode 转义和 \- 转义
                 plain_Cit = DecodeUnicodeEscapes(plain_Cit)
-                
+
                 ' ========== 【审计修复】清空数组，防止上一轮迭代的残留数据 ==========
                 Erase array_RefTitle
                 Erase RefNumber
@@ -134,7 +138,11 @@ Public Sub ZoteroLinkCitation()
                     ' 【审计修复】若仍无法定位标题结尾，强制推进防止死循环
                     If n2 < n1 Then n2 = n1
                     ' 【审计修复】还原占位符为真正的引号
-                    array_RefTitle(i) = DecodeUnicodeEscapes(Replace(Mid(fieldCode, n1, n2 - n1), Chr(1), """"))
+                    Dim rawTitle As String
+                    rawTitle = DecodeUnicodeEscapes(Replace(Mid(fieldCode, n1, n2 - n1), Chr(1), """"))
+                    ' 【Bug修复】剥离 HTML 标签（<i>, <b>, <sup>, <sub> 等），
+                    ' 否则带标签的标题在参考文献列表中找不到匹配
+                    array_RefTitle(i) = StripHtmlTags(rawTitle)
                     fieldCode = Mid(fieldCode, n2 + 1, Len(fieldCode) - n2 - 1)
                     i = i + 1
                     If i > 199 Then
@@ -142,16 +150,62 @@ Public Sub ZoteroLinkCitation()
                     End If
                 Loop
                 Titles_in_Cit = i
-                
-                ' ========== 解析所有 RefNumber ==========
+
+                ' ========== 【Bug修复】解析 RefNumber：拆分复合引文 ==========
+                ' 将 "[2,5,7-9]" 拆分为独立数字 "2", "5", "7", "8", "9"
+                ' 而非原来的一个整体 "2,5,7-9"
                 i = 0
                 Do While (InStr(plain_Cit, "]") Or InStr(plain_Cit, "[")) > 0
                     n1 = InStr(plain_Cit, "[")
                     n2 = InStr(plain_Cit, "]")
                     If n1 > 0 And n2 > n1 Then
-                        RefNumber(i) = Mid(plain_Cit, n1 + 1, n2 - (n1 + 1))
+                        Dim bracketContent As String
+                        bracketContent = Mid(plain_Cit, n1 + 1, n2 - (n1 + 1))
+                        ' 统一破折号为普通连字符
+                        bracketContent = Replace(bracketContent, ChrW(8211), "-")
+                        bracketContent = Replace(bracketContent, ChrW(8212), "-")
+
+                        ' 按逗号拆分
+                        Dim parts() As String
+                        parts = Split(bracketContent, ",")
+                        Dim p As Long
+                        For p = 0 To UBound(parts)
+                            Dim part As String
+                            part = Trim(parts(p))
+                            If InStr(part, "-") > 0 Then
+                                ' 展开范围，如 "7-9" -> 7, 8, 9
+                                Dim rangeParts() As String
+                                rangeParts = Split(part, "-")
+                                If UBound(rangeParts) = 1 Then
+                                    Dim rStart As Long, rEnd As Long
+                                    On Error Resume Next
+                                    rStart = CLng(Trim(rangeParts(0)))
+                                    rEnd = CLng(Trim(rangeParts(1)))
+                                    On Error GoTo CitationError
+                                    If rStart > 0 And rEnd >= rStart And (rEnd - rStart) < 50 Then
+                                        Dim r As Long
+                                        For r = rStart To rEnd
+                                            RefNumber(i) = CStr(r)
+                                            i = i + 1
+                                            If i > 199 Then Exit For
+                                        Next r
+                                    Else
+                                        ' 无法解析范围，保留原文
+                                        RefNumber(i) = part
+                                        i = i + 1
+                                    End If
+                                Else
+                                    RefNumber(i) = part
+                                    i = i + 1
+                                End If
+                            Else
+                                RefNumber(i) = part
+                                i = i + 1
+                            End If
+                            If i > 199 Then Exit For
+                        Next p
+
                         plain_Cit = Mid(plain_Cit, n2 + 1, Len(plain_Cit) - (n2 + 1) + 1)
-                        i = i + 1
                     Else
                         Exit Do
                     End If
@@ -160,16 +214,23 @@ Public Sub ZoteroLinkCitation()
                     End If
                 Loop
                 Refs_in_Cit = i
-                
-                ' ========== 【修复1】标题映射：保留前 N 个 title，清空多余的 ==========
+
+                ' ========== 标题映射 ==========
+                ' 如果标题数少于引文数，复用最后一个标题填充
+                ' 如果标题数多于引文数，清空多余的
                 If Titles_in_Cit > Refs_in_Cit And Refs_in_Cit > 0 Then
-                    i = Refs_in_Cit
-                    Do While i <= Titles_in_Cit - 1
-                        array_RefTitle(i) = ""
-                        i = i + 1
+                    Dim k As Long
+                    k = Refs_in_Cit
+                    Do While k <= Titles_in_Cit - 1
+                        array_RefTitle(k) = ""
+                        k = k + 1
                     Loop
+                ElseIf Titles_in_Cit < Refs_in_Cit And Titles_in_Cit > 0 Then
+                    ' 复合引文展开后，引文数 > 标题数
+                    ' 标题按原始顺序对应，多出的引文号无标题则跳过
+                    ' 不做额外处理，循环中 title="" 会被 If title <> "" 跳过
                 End If
-                
+
                 ' ========== 为每个 Ref 创建超链接 ==========
                 For Refs = 0 To Refs_in_Cit - 1 Step 1
                     title = array_RefTitle(Refs)
@@ -191,7 +252,7 @@ Public Sub ZoteroLinkCitation()
                         ' --- 在参考文献列表中查找对应条目并打书签 ---
                         ActiveWindow.View.ShowFieldCodes = False
                         Selection.GoTo What:=wdGoToBookmark, Name:="Zotero_Bibliography"
-                        
+
                         Selection.Find.ClearFormatting
                         With Selection.Find
                             .Text = Left(title, 255)
@@ -246,7 +307,7 @@ Public Sub ZoteroLinkCitation()
                             ' 【兜底】确认书签确实创建成功，否则跳过，避免产生断链
                             If Not ActiveDocument.Bookmarks.Exists(titleAnchor) Then GoTo NextRef
 
-                            ' --- 【修复2】在域结果中搜索 RefNumber，尝试多种破折号变体 ---
+                            ' --- 在域结果中搜索 RefNumber，尝试多种破折号变体 ---
                             Dim searchFound As Boolean
                             searchFound = False
 
@@ -296,6 +357,9 @@ Public Sub ZoteroLinkCitation()
                                  .ColorIndex = wdBlack
                             End With
 
+                        Else
+                            ' 【调试】记录未找到标题的引文
+                            failedCitations = failedCitations & "[" & RefNumber(Refs) & "] " & Left(title, 30) & "..." & vbCrLf
                         End If
 NextRef:
                     End If
@@ -319,8 +383,12 @@ NextCitation:
     ActiveWindow.View.ShowFieldCodes = False
     ActiveDocument.Range(nStart, nEnd).Select
     Application.ScreenUpdating = True
-    
-    MsgBox "引注超链接已全部生成完毕！", vbInformation, "完成"
+
+    If failedCitations <> "" Then
+        MsgBox "引注超链接已生成，但以下引文未能匹配到参考文献列表：" & vbCrLf & vbCrLf & failedCitations, vbExclamation, "部分完成"
+    Else
+        MsgBox "引注超链接已全部生成完毕！", vbInformation, "完成"
+    End If
 
     Exit Sub
 
@@ -347,7 +415,7 @@ Function MakeValidBMName(strIn As String)
             tempStr = tempStr & "_"
         End Select
     Next i
-    ' 【审计修复】收缩连续下划线（原代码误用双空格，实际不可能出现空格）
+    ' 【审计修复】收缩连续下划线
     Do While InStr(tempStr, "__") > 0
         tempStr = Replace(tempStr, "__", "_")
     Loop
@@ -379,4 +447,28 @@ Function DecodeUnicodeEscapes(ByVal s As String) As String
     Loop
     s = Replace(s, "\-", "-")
     DecodeUnicodeEscapes = s
+End Function
+
+' 【Bug修复】剥离 HTML 标签
+' Zotero 域代码 JSON 中的 title 可能含 <i>, <b>, <sup>, <sub> 等标签
+' 但参考文献列表中显示的是 Word 格式化后的纯文本，不含这些标签
+' 不剥离就会导致 Selection.Find 找不到标题 → 不创建书签 → 超链接失效
+Function StripHtmlTags(ByVal s As String) As String
+    Dim result As String
+    Dim inTag As Boolean
+    Dim ch As String
+    Dim i As Long
+    result = ""
+    inTag = False
+    For i = 1 To Len(s)
+        ch = Mid(s, i, 1)
+        If ch = "<" Then
+            inTag = True
+        ElseIf ch = ">" Then
+            inTag = False
+        ElseIf Not inTag Then
+            result = result & ch
+        End If
+    Next i
+    StripHtmlTags = result
 End Function
