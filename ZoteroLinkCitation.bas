@@ -129,8 +129,16 @@ Public Sub ZoteroLinkCitation()
                 ' 【审计修复】将转义引号 \" 替换为占位符，防止 JSON 解析被截断
                 fieldCode = Replace(fieldCode, "\""", Chr(1))
                 i = 0
-                Do While InStr(fieldCode, """title"":""") > 0
-                    n1 = InStr(fieldCode, """title"":""") + Len("""title"":""")
+                ' 【Bug修复】用 FindExactTitleKey 精确匹配 JSON 的 "title" 键，
+                ' 排除 "container-title"、"short-title"、"original-title" 等
+                Dim searchPos As Long
+                searchPos = 1
+                Do While searchPos <= Len(fieldCode)
+                    Dim foundPos As Long
+                    foundPos = FindExactTitleKey(fieldCode, searchPos)
+                    If foundPos = 0 Then Exit Do
+
+                    n1 = foundPos + Len("""title"":""")
                     n2 = InStr(Mid(fieldCode, n1, Len(fieldCode) - n1), """,""") - 1 + n1
                     If n2 < n1 Then
                         n2 = InStr(Mid(fieldCode, n1, Len(fieldCode) - n1), "}") - 1 + n1 - 1
@@ -143,7 +151,7 @@ Public Sub ZoteroLinkCitation()
                     ' 【Bug修复】剥离 HTML 标签（<i>, <b>, <sup>, <sub> 等），
                     ' 否则带标签的标题在参考文献列表中找不到匹配
                     array_RefTitle(i) = StripHtmlTags(rawTitle)
-                    fieldCode = Mid(fieldCode, n2 + 1, Len(fieldCode) - n2 - 1)
+                    searchPos = n2 + 1
                     i = i + 1
                     If i > 199 Then
                         Exit Do
@@ -252,6 +260,8 @@ Public Sub ZoteroLinkCitation()
                         ' --- 在参考文献列表中查找对应条目并打书签 ---
                         ActiveWindow.View.ShowFieldCodes = False
                         Selection.GoTo What:=wdGoToBookmark, Name:="Zotero_Bibliography"
+                        ' 【Bug修复】折叠到起点，确保 Find 从参考文献列表开头搜索
+                        Selection.Collapse Direction:=wdCollapseStart
 
                         Selection.Find.ClearFormatting
                         With Selection.Find
@@ -447,6 +457,35 @@ Function DecodeUnicodeEscapes(ByVal s As String) As String
     Loop
     s = Replace(s, "\-", "-")
     DecodeUnicodeEscapes = s
+End Function
+
+' 【Bug修复】精确匹配 JSON 中的 "title" 键
+' 排除 "container-title"、"short-title"、"original-title"、"title-short" 等
+' 原理：找到 "title":" 后，检查其前一个字符是否为 , 或 { 或空白
+' 如果前一个字符是 - 或字母，说明匹配到了 xxx-title，跳过继续搜索
+Function FindExactTitleKey(ByVal s As String, ByVal startPos As Long) As Long
+    Dim target As String
+    target = """title"":"""
+    Dim pos As Long
+    pos = InStr(startPos, s, target)
+    Do While pos > 0
+        If pos = 1 Then
+            ' 在字符串最开头，是精确匹配
+            FindExactTitleKey = pos
+            Exit Function
+        End If
+        Dim prevChar As String
+        prevChar = Mid(s, pos - 1, 1)
+        ' "title" 前面应该是 , 或 { 或空白，表示这是独立的 JSON key
+        ' 如果是 - 或字母，则是 container-title、short-title 等的一部分
+        If prevChar = "," Or prevChar = "{" Or prevChar = " " Or prevChar = vbTab Or prevChar = vbLf Or prevChar = vbCr Then
+            FindExactTitleKey = pos
+            Exit Function
+        End If
+        ' 不是精确匹配，继续搜索下一个
+        pos = InStr(pos + 1, s, target)
+    Loop
+    FindExactTitleKey = 0
 End Function
 
 ' 【Bug修复】剥离 HTML 标签
