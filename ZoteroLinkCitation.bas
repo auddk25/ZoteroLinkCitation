@@ -408,7 +408,7 @@ ErrorHandler:
 
 End Sub
 
-Function MakeValidBMName(strIn As String)
+Function MakeValidBMName(ByVal strIn As String)
     Dim pFirstChr As String
     Dim i As Long
     Dim tempStr As String
