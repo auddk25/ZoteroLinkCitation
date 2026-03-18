@@ -368,8 +368,14 @@ Public Sub ZoteroLinkCitation()
                             End With
 
                         Else
-                            ' 【调试】记录未找到标题的引文
-                            failedCitations = failedCitations & "[" & RefNumber(Refs) & "] " & Left(title, 30) & "..." & vbCrLf
+                            ' 【调试】记录未找到标题的引文，附带失败原因
+                            Dim failReason As String
+                            If Not Selection.Find.Found Then
+                                failReason = "Find未找到"
+                            Else
+                                failReason = "范围检查失败"
+                            End If
+                            failedCitations = failedCitations & "[" & RefNumber(Refs) & "] " & failReason & " | " & Left(title, 40) & vbCrLf
                         End If
 NextRef:
                     End If
@@ -395,7 +401,7 @@ NextCitation:
     Application.ScreenUpdating = True
 
     If failedCitations <> "" Then
-        MsgBox "引注超链接已生成，但以下引文未能匹配到参考文献列表：" & vbCrLf & vbCrLf & failedCitations, vbExclamation, "部分完成"
+        MsgBox "引注超链接已生成，但以下引文未能匹配：" & vbCrLf & vbCrLf & Left(failedCitations, 800), vbExclamation, "部分完成"
     Else
         MsgBox "引注超链接已全部生成完毕！", vbInformation, "完成"
     End If
