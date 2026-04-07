@@ -264,48 +264,70 @@ Public Sub ZoteroLinkCitation()
                         End If
 
                         ' --- 在参考文献列表中查找对应条目并打书签 ---
-                        ActiveWindow.View.ShowFieldCodes = False
-                        Selection.GoTo What:=wdGoToBookmark, Name:="Zotero_Bibliography"
-                        ' 【Bug修复】折叠到起点，确保 Find 从参考文献列表开头搜索
-                        Selection.Collapse Direction:=wdCollapseStart
-
-                        Selection.Find.ClearFormatting
-                        With Selection.Find
-                            .Text = Left(title, 255)
-                            .Replacement.Text = ""
-                            .Forward = True
-                            .Wrap = wdFindStop
-                            .Format = False
-                            .MatchCase = False
-                            .MatchWholeWord = False
-                        End With
-                        Selection.Find.Execute
-
-                        ' 【审计修复】综合验证：Find 结果有效 + 长标题全文匹配 + 在参考文献区域内
+                        ' 【Bug修复 v2】渐进式短前缀降级搜索：
+                        ' 标题中段任意字符不一致（CSL transform、全角标点、Unicode 变体）
+                        ' 都会让一次性 255 字符全长搜索失败。改成 5 级前缀降级，命中即出。
                         Dim titleVerified As Boolean
-                        titleVerified = Selection.Find.Found
+                        titleVerified = False
+                        Dim prefixLengths(4) As Long
+                        prefixLengths(0) = 255
+                        prefixLengths(1) = 100
+                        prefixLengths(2) = 60
+                        prefixLengths(3) = 40
+                        prefixLengths(4) = 25
 
-                        ' 标题超 255 字符时，验证匹配位置的完整文本一致
-                        If titleVerified And Len(title) > 255 Then
-                            Dim verifyEnd As Long
-                            verifyEnd = Selection.Start + Len(title)
-                            If verifyEnd <= ActiveDocument.Content.End Then
-                                Dim verifyRange As Range
-                                Set verifyRange = ActiveDocument.Range(Selection.Start, verifyEnd)
-                                If verifyRange.Text <> title Then
-                                    titleVerified = False
+                        Dim pli As Long
+                        For pli = 0 To 4
+                            If titleVerified Then Exit For
+
+                            Dim curLen As Long
+                            curLen = prefixLengths(pli)
+                            If curLen > Len(title) Then curLen = Len(title)
+                            ' 长度小于 8 字符的前缀容易误匹配，跳过
+                            If curLen < 8 Then Exit For
+
+                            ActiveWindow.View.ShowFieldCodes = False
+                            Selection.GoTo What:=wdGoToBookmark, Name:="Zotero_Bibliography"
+                            ' 【Bug修复】折叠到起点，确保 Find 从参考文献列表开头搜索
+                            Selection.Collapse Direction:=wdCollapseStart
+
+                            Selection.Find.ClearFormatting
+                            With Selection.Find
+                                .Text = Left(title, curLen)
+                                .Replacement.Text = ""
+                                .Forward = True
+                                .Wrap = wdFindStop
+                                .Format = False
+                                .MatchCase = False
+                                .MatchWholeWord = False
+                            End With
+                            Selection.Find.Execute
+
+                            If Not Selection.Find.Found Then GoTo NextPrefix
+
+                            ' 【审计修复】超长标题（>255）验证匹配的完整文本
+                            If Len(title) > 255 And pli = 0 Then
+                                Dim verifyEnd As Long
+                                verifyEnd = Selection.Start + Len(title)
+                                If verifyEnd <= ActiveDocument.Content.End Then
+                                    Dim verifyRange As Range
+                                    Set verifyRange = ActiveDocument.Range(Selection.Start, verifyEnd)
+                                    If verifyRange.Text <> title Then GoTo NextPrefix
                                 End If
                             End If
-                        End If
 
-                        ' 验证匹配位置确实在参考文献区域内，而非正文
-                        If titleVerified And BookmarkExistsCompat("Zotero_Bibliography") Then
-                            Dim biblRange As Range
-                            Set biblRange = ActiveDocument.Bookmarks("Zotero_Bibliography").Range
-                            If Selection.Start < biblRange.Start Or Selection.End > biblRange.End Then
-                                titleVerified = False
+                            ' 验证匹配位置确实在参考文献区域内，而非正文
+                            If BookmarkExistsCompat("Zotero_Bibliography") Then
+                                Dim biblRange As Range
+                                Set biblRange = ActiveDocument.Bookmarks("Zotero_Bibliography").Range
+                                If Selection.Start < biblRange.Start Or Selection.End > biblRange.End Then
+                                    GoTo NextPrefix
+                                End If
                             End If
-                        End If
+
+                            titleVerified = True
+NextPrefix:
+                        Next pli
 
                         If titleVerified Then
                             Selection.MoveStartUntil ("["), Count:=wdBackward
@@ -374,8 +396,8 @@ Public Sub ZoteroLinkCitation()
                             End With
 
                         Else
-                            ' 【调试】记录未找到标题的引文
-                            failedCitations = failedCitations & "[" & RefNumber(Refs) & "] " & Left(title, 30) & "..." & vbCrLf
+                            ' 【调试】记录未找到标题的引文（显示前 50 字符便于定位）
+                            failedCitations = failedCitations & "[" & RefNumber(Refs) & "] " & Left(title, 50) & "..." & vbCrLf
                         End If
 NextRef:
                     End If
