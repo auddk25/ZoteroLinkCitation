@@ -25,9 +25,11 @@ Public Sub ZoteroLinkCitation()
     Dim n1&, n2&
     Dim Titles_in_Cit&, Refs_in_Cit&, i&, Refs&
 
-    ' 【审计修复】用 Dictionary 追踪已用书签名，防止截断后冲突
-    Dim usedBookmarks As Object
-    Set usedBookmarks = CreateObject("Scripting.Dictionary")
+    ' 【兼容性增强】静态数组替代 Scripting.Dictionary，
+    ' 避免依赖 scrrun.dll（Office for Mac、锁死的企业 Windows 没有）
+    Dim usedBookmarks(2000) As String
+    Dim usedBookmarksCount As Long
+    usedBookmarksCount = 0
     Dim array_RefTitle(200) As String
     Dim RefNumber(200) As String
 
@@ -67,15 +69,16 @@ Public Sub ZoteroLinkCitation()
 
     ' 【审计修复】先收集所有 Zotero 域的索引，再倒序遍历，
     ' 避免 Hyperlinks.Add 插入新 Field 导致 For Each 迭代器异常
+    ' 【兼容性增强】用固定大小数组代替 ReDim Preserve，部分老版本 VBA 对未初始化动态数组的 ReDim Preserve 表现不一致
     Dim aField As Field
     Dim zotFieldCount As Long
-    Dim zotFieldIndices() As Long
+    Dim zotFieldIndices(1 To 5000) As Long
     zotFieldCount = 0
     Dim fi As Long
     For fi = 1 To ActiveDocument.Fields.Count
         If InStr(ActiveDocument.Fields(fi).Code, "ADDIN ZOTERO_ITEM") > 0 Then
             zotFieldCount = zotFieldCount + 1
-            ReDim Preserve zotFieldIndices(1 To zotFieldCount)
+            If zotFieldCount > 5000 Then Exit For
             zotFieldIndices(zotFieldCount) = fi
         End If
     Next fi
@@ -251,11 +254,14 @@ Public Sub ZoteroLinkCitation()
                         Dim bmSuffix As Long
                         baseBMName = titleAnchor
                         bmSuffix = 2
-                        Do While usedBookmarks.Exists(titleAnchor)
+                        Do While IsBookmarkNameUsed(usedBookmarks, usedBookmarksCount, titleAnchor)
                             titleAnchor = Left(baseBMName, 40 - Len(CStr(bmSuffix))) & bmSuffix
                             bmSuffix = bmSuffix + 1
                         Loop
-                        usedBookmarks(titleAnchor) = True
+                        If usedBookmarksCount < 2000 Then
+                            usedBookmarks(usedBookmarksCount) = titleAnchor
+                            usedBookmarksCount = usedBookmarksCount + 1
+                        End If
 
                         ' --- 在参考文献列表中查找对应条目并打书签 ---
                         ActiveWindow.View.ShowFieldCodes = False
@@ -293,7 +299,7 @@ Public Sub ZoteroLinkCitation()
                         End If
 
                         ' 验证匹配位置确实在参考文献区域内，而非正文
-                        If titleVerified And ActiveDocument.Bookmarks.Exists("Zotero_Bibliography") Then
+                        If titleVerified And BookmarkExistsCompat("Zotero_Bibliography") Then
                             Dim biblRange As Range
                             Set biblRange = ActiveDocument.Bookmarks("Zotero_Bibliography").Range
                             If Selection.Start < biblRange.Start Or Selection.End > biblRange.End Then
@@ -315,7 +321,7 @@ Public Sub ZoteroLinkCitation()
                             End With
 
                             ' 【兜底】确认书签确实创建成功，否则跳过，避免产生断链
-                            If Not ActiveDocument.Bookmarks.Exists(titleAnchor) Then GoTo NextRef
+                            If Not BookmarkExistsCompat(titleAnchor) Then GoTo NextRef
 
                             ' --- 在域结果中搜索 RefNumber，尝试多种破折号变体 ---
                             Dim searchFound As Boolean
@@ -512,3 +518,26 @@ Function StripHtmlTags(ByVal s As String) As String
     StripHtmlTags = result
 End Function
 
+' 【兼容性增强】线性扫描已用书签名数组，替代 Scripting.Dictionary.Exists
+' 避免依赖 scrrun.dll，Office for Mac 与锁死的企业 Windows 不依赖外部 COM 组件
+Function IsBookmarkNameUsed(arr() As String, ByVal cnt As Long, ByVal name As String) As Boolean
+    Dim k As Long
+    For k = 0 To cnt - 1
+        If arr(k) = name Then
+            IsBookmarkNameUsed = True
+            Exit Function
+        End If
+    Next k
+    IsBookmarkNameUsed = False
+End Function
+
+' 【兼容性增强】用 On Error Resume Next 包装的书签存在性检查
+' 替代 ActiveDocument.Bookmarks.Exists，后者在 Word 2003 及部分老版本无此方法
+Function BookmarkExistsCompat(ByVal bmName As String) As Boolean
+    Dim bm As Bookmark
+    On Error Resume Next
+    Set bm = ActiveDocument.Bookmarks(bmName)
+    BookmarkExistsCompat = (Err.Number = 0 And Not bm Is Nothing)
+    Err.Clear
+    On Error GoTo 0
+End Function
